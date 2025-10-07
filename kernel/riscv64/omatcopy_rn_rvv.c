@@ -29,21 +29,21 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 
 #if !defined(DOUBLE)
-#define VSETVL_MAX				__riscv_vsetvlmax_e32m8()
-#define VSETVL(n)               __riscv_vsetvl_e32m8(n)
-#define FLOAT_V_T               vfloat32m8_t
-#define VLEV_FLOAT              __riscv_vle32_v_f32m8
-#define VSEV_FLOAT              __riscv_vse32_v_f32m8
-#define VFMULVF_FLOAT           __riscv_vfmul_vf_f32m8
-#define VFMVVF_FLOAT            __riscv_vfmv_v_f_f32m8
+#define VSETVL_MAX				__riscv_vsetvlmax_e32m4()
+#define VSETVL(n)               __riscv_vsetvl_e32m4(n)
+#define FLOAT_V_T               vfloat32m4_t
+#define VLEV_FLOAT              __riscv_vle32_v_f32m4
+#define VSEV_FLOAT              __riscv_vse32_v_f32m4
+#define VFMULVF_FLOAT           __riscv_vfmul_vf_f32m4
+#define VFMVVF_FLOAT            __riscv_vfmv_v_f_f32m4
 #else
-#define VSETVL_MAX				__riscv_vsetvlmax_e64m8()
-#define VSETVL(n)               __riscv_vsetvl_e64m8(n)
-#define FLOAT_V_T               vfloat64m8_t
-#define VLEV_FLOAT              __riscv_vle64_v_f64m8
-#define VSEV_FLOAT              __riscv_vse64_v_f64m8
-#define VFMULVF_FLOAT           __riscv_vfmul_vf_f64m8
-#define VFMVVF_FLOAT            __riscv_vfmv_v_f_f64m8
+#define VSETVL_MAX				__riscv_vsetvlmax_e64m4()
+#define VSETVL(n)               __riscv_vsetvl_e64m4(n)
+#define FLOAT_V_T               vfloat64m4_t
+#define VLEV_FLOAT              __riscv_vle64_v_f64m4
+#define VSEV_FLOAT              __riscv_vse64_v_f64m4
+#define VFMULVF_FLOAT           __riscv_vfmul_vf_f64m4
+#define VFMVVF_FLOAT            __riscv_vfmv_v_f_f64m4
 #endif
 
 /*****************************************************
@@ -61,7 +61,7 @@ int CNAME(BLASLONG rows, BLASLONG cols, FLOAT alpha, FLOAT *a, BLASLONG lda, FLO
     FLOAT *aptr, *bptr;
     size_t vl, fixed_vl;
 
-    FLOAT_V_T va;
+    FLOAT_V_T va, vb;
     if (rows <= 0) return(0);
     if (cols <= 0) return(0);
 
@@ -77,6 +77,13 @@ int CNAME(BLASLONG rows, BLASLONG cols, FLOAT alpha, FLOAT *a, BLASLONG lda, FLO
             /* use a fixed VL per row to reduce vsetvl overhead, then handle tail */
             fixed_vl = VSETVL(cols);
             j = 0;
+            /* simple 2x unroll to improve store combining */
+            while (j + (BLASLONG)(fixed_vl << 1) <= cols)
+            {
+                VSEV_FLOAT(bptr + j, va, fixed_vl);
+                VSEV_FLOAT(bptr + j + fixed_vl, va, fixed_vl);
+                j += (fixed_vl << 1);
+            }
             while (j + (BLASLONG)fixed_vl <= cols)
             {
                 VSEV_FLOAT(bptr + j, va, fixed_vl);
@@ -99,9 +106,19 @@ int CNAME(BLASLONG rows, BLASLONG cols, FLOAT alpha, FLOAT *a, BLASLONG lda, FLO
         {
             fixed_vl = VSETVL(cols);
             j = 0;
+            /* prefetch next segments to reduce miss bursts */
+            while (j + (BLASLONG)(fixed_vl << 1) <= cols)
+            {
+                __builtin_prefetch(aptr + j + (fixed_vl << 1), 0, 1);
+                __builtin_prefetch(bptr + j + (fixed_vl << 1), 1, 1);
+                va = VLEV_FLOAT(aptr + j, fixed_vl);
+                vb = VLEV_FLOAT(aptr + j + fixed_vl, fixed_vl);
+                VSEV_FLOAT(bptr + j, va, fixed_vl);
+                VSEV_FLOAT(bptr + j + fixed_vl, vb, fixed_vl);
+                j += (fixed_vl << 1);
+            }
             while (j + (BLASLONG)fixed_vl <= cols)
             {
-                /* load and store full vectors */
                 va = VLEV_FLOAT(aptr + j, fixed_vl);
                 VSEV_FLOAT(bptr + j, va, fixed_vl);
                 j += fixed_vl;
@@ -122,6 +139,18 @@ int CNAME(BLASLONG rows, BLASLONG cols, FLOAT alpha, FLOAT *a, BLASLONG lda, FLO
     {
         fixed_vl = VSETVL(cols);
         j = 0;
+        while (j + (BLASLONG)(fixed_vl << 1) <= cols)
+        {
+            __builtin_prefetch(aptr + j + (fixed_vl << 1), 0, 1);
+            __builtin_prefetch(bptr + j + (fixed_vl << 1), 1, 1);
+            va = VLEV_FLOAT(aptr + j, fixed_vl);
+            vb = VLEV_FLOAT(aptr + j + fixed_vl, fixed_vl);
+            va = VFMULVF_FLOAT(va, alpha, fixed_vl);
+            vb = VFMULVF_FLOAT(vb, alpha, fixed_vl);
+            VSEV_FLOAT(bptr + j, va, fixed_vl);
+            VSEV_FLOAT(bptr + j + fixed_vl, vb, fixed_vl);
+            j += (fixed_vl << 1);
+        }
         while (j + (BLASLONG)fixed_vl <= cols)
         {
             va = VLEV_FLOAT(aptr + j, fixed_vl);
