@@ -57,64 +57,90 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 int CNAME(BLASLONG rows, BLASLONG cols, FLOAT alpha, FLOAT *a, BLASLONG lda, FLOAT *b, BLASLONG ldb)
 {
-	BLASLONG i, j;
-	FLOAT *aptr, *bptr;
-	size_t vl;
+    BLASLONG i, j;
+    FLOAT *aptr, *bptr;
+    size_t vl, fixed_vl;
 
-	FLOAT_V_T va;
-	if (rows <= 0) return(0);
-	if (cols <= 0) return(0);
+    FLOAT_V_T va;
+    if (rows <= 0) return(0);
+    if (cols <= 0) return(0);
 
-	aptr = a;
-	bptr = b;
+    aptr = a;
+    bptr = b;
 
-	if (alpha == 0.0)
-	{
-		vl = VSETVL_MAX;
-		va = VFMVVF_FLOAT(0, vl);
-		for (i = 0; i < rows; i++)
-		{
-			for (j = 0; j < cols; j += vl)
-			{
-				vl = VSETVL(cols - j);
-				VSEV_FLOAT(bptr + j, va, vl);
-			}
-			aptr += lda;
-			bptr += ldb;
-		}
-		return(0);
-	}
+    if (alpha == 0.0)
+    {
+        vl = VSETVL_MAX;
+        va = VFMVVF_FLOAT(0, vl);
+        for (i = 0; i < rows; i++)
+        {
+            /* use a fixed VL per row to reduce vsetvl overhead, then handle tail */
+            fixed_vl = VSETVL(cols);
+            j = 0;
+            while (j + (BLASLONG)fixed_vl <= cols)
+            {
+                VSEV_FLOAT(bptr + j, va, fixed_vl);
+                j += fixed_vl;
+            }
+            if (j < cols)
+            {
+                vl = VSETVL(cols - j);
+                VSEV_FLOAT(bptr + j, va, vl);
+            }
+            aptr += lda;
+            bptr += ldb;
+        }
+        return(0);
+    }
 
-	if (alpha == 1.0)
-	{
-		for (i = 0; i < rows; i++)
-		{
-			for (j = 0; j < cols; j += vl)
-			{
-				vl = VSETVL(cols - j);
-				va = VLEV_FLOAT(aptr + j, vl);
-				VSEV_FLOAT(bptr + j, va, vl);
-			}
-			aptr += lda;
-			bptr += ldb;
-		}
-		return(0);
-	}
+    if (alpha == 1.0)
+    {
+        for (i = 0; i < rows; i++)
+        {
+            fixed_vl = VSETVL(cols);
+            j = 0;
+            while (j + (BLASLONG)fixed_vl <= cols)
+            {
+                /* load and store full vectors */
+                va = VLEV_FLOAT(aptr + j, fixed_vl);
+                VSEV_FLOAT(bptr + j, va, fixed_vl);
+                j += fixed_vl;
+            }
+            if (j < cols)
+            {
+                vl = VSETVL(cols - j);
+                va = VLEV_FLOAT(aptr + j, vl);
+                VSEV_FLOAT(bptr + j, va, vl);
+            }
+            aptr += lda;
+            bptr += ldb;
+        }
+        return(0);
+    }
 
-	for (i = 0; i < rows; i++)
-	{
-		for (j = 0; j < cols; j += vl)
-		{
-			vl = VSETVL(cols - j);
-			va = VLEV_FLOAT(aptr + j, vl);
-			va = VFMULVF_FLOAT(va, alpha, vl);
-			VSEV_FLOAT(bptr + j, va, vl);
-		}
-		aptr += lda;
-		bptr += ldb;
-	}
+    for (i = 0; i < rows; i++)
+    {
+        fixed_vl = VSETVL(cols);
+        j = 0;
+        while (j + (BLASLONG)fixed_vl <= cols)
+        {
+            va = VLEV_FLOAT(aptr + j, fixed_vl);
+            va = VFMULVF_FLOAT(va, alpha, fixed_vl);
+            VSEV_FLOAT(bptr + j, va, fixed_vl);
+            j += fixed_vl;
+        }
+        if (j < cols)
+        {
+            vl = VSETVL(cols - j);
+            va = VLEV_FLOAT(aptr + j, vl);
+            va = VFMULVF_FLOAT(va, alpha, vl);
+            VSEV_FLOAT(bptr + j, va, vl);
+        }
+        aptr += lda;
+        bptr += ldb;
+    }
 
-	return(0);
+    return(0);
 }
 
 
